@@ -1,0 +1,27 @@
+# Environment
+.env
+*.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+chroma_db/
+
+# Xcode / iOS
+*.xcuserstate
+xcuserdata/
+DerivedData/
+*.ipa
+*.dSYM.zip
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Research / planning docs (not needed on GitHub)
+skills-lock.json

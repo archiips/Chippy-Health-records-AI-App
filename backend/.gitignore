@@ -1,0 +1,21 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Local vector DB (dev only — not for version control)
+chroma_db/
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
