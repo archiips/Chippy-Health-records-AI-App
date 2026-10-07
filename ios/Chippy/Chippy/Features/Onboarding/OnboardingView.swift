@@ -9,17 +9,17 @@ struct OnboardingView: View {
         OnboardingPage(
             icon: "heart.text.square.fill",
             title: "Your health history,\nfinally clear.",
-            body: "Chippy turns confusing medical documents into a searchable health timeline explained in plain language."
+            body: "Import records, find the source page, and build a timeline of facts you have reviewed."
         ),
         OnboardingPage(
             icon: "lock.shield.fill",
             title: "Your data stays private.",
-            body: "Text is extracted on your device before anything is sent to the server. Your documents are stored securely and never shared or sold."
+            body: "Records stay on this device by default. On-device AI is optional, and cloud processing requires your explicit permission."
         ),
         OnboardingPage(
             icon: "doc.text.magnifyingglass",
-            title: "Ask anything about\nyour records.",
-            body: "Upload a lab result, prescription, or visit note — then ask questions in plain English. Chippy reads your documents so you don't have to."
+            title: "Review before\nyou rely on it.",
+            body: "Compare suggested facts with original pages, correct mistakes, and share selected reviewed facts for your next appointment."
         ),
     ]
 

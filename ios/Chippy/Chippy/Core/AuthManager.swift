@@ -10,12 +10,14 @@ final class AuthManager {
     private(set) var email: String?
 
     private let keychain = KeychainService()
+    private var sessionRevision = 0
 
     init() {
         restoreSession()
     }
 
     func signIn(accessToken: String, refreshToken: String, userId: String, email: String = "") {
+        sessionRevision += 1
         keychain.save(token: accessToken, forKey: .accessToken)
         keychain.save(token: refreshToken, forKey: .refreshToken)
         keychain.save(token: userId, forKey: .userId)
@@ -27,6 +29,7 @@ final class AuthManager {
     }
 
     func signOut() {
+        sessionRevision += 1
         keychain.delete(key: .accessToken)
         keychain.delete(key: .refreshToken)
         keychain.delete(key: .userId)
@@ -67,15 +70,18 @@ final class AuthManager {
 
     /// Attempt a token refresh. Returns the new access token, or nil if refresh fails (forces sign-out).
     func refreshIfNeeded() async -> String? {
+        let revision = sessionRevision
         guard let storedRefresh = keychain.load(key: .refreshToken) else {
             signOut()
             return nil
         }
         do {
             let response = try await AuthService.shared.refreshToken(storedRefresh)
+            guard revision == sessionRevision else { return nil }
             updateTokens(accessToken: response.accessToken, refreshToken: response.refreshToken)
             return response.accessToken
         } catch {
+            guard revision == sessionRevision else { return nil }
             signOut()
             return nil
         }

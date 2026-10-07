@@ -35,6 +35,9 @@ struct LockScreenView: View {
 
                 Spacer()
 
+                Text("Device authentication is required. If it is unavailable, set a device passcode in iOS Settings, then try again.")
+                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .padding(.horizontal)
                 Button {
                     Task { await lockManager.authenticate() }
                 } label: {

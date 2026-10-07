@@ -24,7 +24,8 @@ final class ChatViewModel {
 
     // MARK: - Send message
 
-    func sendMessage(authManager: AuthManager, context: ModelContext, documentIds: [String]? = nil) async {
+    func sendMessage(authManager: AuthManager, context: ModelContext, preferences: ProcessingPreferences, documentIds: [String]? = nil) async {
+        guard let scope = try? CloudOperationScope(auth: authManager, preferences: preferences) else { errorMessage = "Cloud processing permission is required."; return }
         let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty, !isStreaming else { return }
         inputText = ""
@@ -36,7 +37,7 @@ final class ChatViewModel {
         messages.append(userMsg)
 
         // Get a valid (non-expired) token, refreshing if needed
-        guard let token = await authManager.validToken() else {
+        guard let token = try? await scope.token(auth: authManager, preferences: preferences) else {
             errorMessage = "Please sign in again."
             return
         }
@@ -50,19 +51,18 @@ final class ChatViewModel {
                 isStreaming = false
             }
 
+            guard scope.isValid(userID: authManager.currentUserId, preferences: preferences) else { return }
             var request = URLRequest(url: Constants.baseURL.appendingPathComponent("/chat/stream"))
             request.httpMethod = "POST"
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-            let body: [String: Any] = [
-                "query": query,
-                "document_ids": documentIds as Any
-            ]
+            var body: [String: Any] = ["query": query]
+            if let documentIds { body["document_ids"] = documentIds }
             request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
             for await chunk in await StreamingService.shared.stream(request: request) {
-                guard !Task.isCancelled else { break }
+                guard !Task.isCancelled, scope.isValid(userID: authManager.currentUserId, preferences: preferences) else { break }
                 // Detect server-side error payload (e.g. {"error": "503 ..."})
                 if chunk.hasPrefix("{\"error\":") {
                     errorMessage = "Service temporarily unavailable. Please try again."
@@ -72,7 +72,7 @@ final class ChatViewModel {
                 streamingText += chunk
             }
 
-            guard !Task.isCancelled, !streamingText.isEmpty else { return }
+            guard !Task.isCancelled, !streamingText.isEmpty, scope.isValid(userID: authManager.currentUserId, preferences: preferences) else { return }
             UINotificationFeedbackGenerator().notificationOccurred(.success)
 
             // Persist completed assistant message
@@ -99,16 +99,15 @@ final class ChatViewModel {
         isStreaming = false
     }
 
-    func clearHistory(authManager: AuthManager, context: ModelContext) async {
-        guard let token = authManager.accessToken else { return }
-        // Clear locally
-        for msg in messages { context.delete(msg) }
-        messages = []
-        try? context.save()
-        // Clear on server (best-effort)
-        var request = URLRequest(url: Constants.baseURL.appendingPathComponent("/chat/history"))
-        request.httpMethod = "DELETE"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        _ = try? await URLSession.shared.data(for: request)
+    func clearHistory(authManager: AuthManager, context: ModelContext, preferences: ProcessingPreferences) async {
+        guard let scope = try? CloudOperationScope(auth: authManager, preferences: preferences),
+              let token = try? await scope.token(auth: authManager, preferences: preferences) else { return }
+        do {
+            try await APIClient.shared.requestEmpty("/chat/history", method: "DELETE", token: token)
+            guard scope.isValid(userID: authManager.currentUserId, preferences: preferences) else { return }
+            for message in messages { context.delete(message) }
+            try context.save()
+            messages = []
+        } catch { context.rollback(); errorMessage = "Could not delete chat history. Please retry." }
     }
 }

@@ -7,6 +7,8 @@ struct DocumentDetailView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Environment(AuthManager.self) private var authManager
+    @Environment(ProcessingPreferences.self) private var preferences
+    @State private var errorMessage: String?
     @State private var showQuickLook = false
     @State private var showFileNotFoundAlert = false
     @State private var showDeleteConfirmation = false
@@ -61,6 +63,9 @@ struct DocumentDetailView: View {
                 explainButton
             }
         }
+        .alert("Deletion failed", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: { Text(errorMessage ?? "") }
         .sheet(isPresented: $showExplainer) {
             ExplainerView(document: document)
         }
@@ -71,11 +76,7 @@ struct DocumentDetailView: View {
     private var previewSection: some View {
         Section {
             Button {
-                guard FileManager.default.fileExists(atPath: document.resolvedFileURL.path) else {
-                    showFileNotFoundAlert = true
-                    return
-                }
-                showQuickLook = true
+                Task { await openOriginal() }
             } label: {
                 HStack {
                     if let data = document.thumbnailData, let img = UIImage(data: data) {
@@ -199,10 +200,29 @@ struct DocumentDetailView: View {
     }
 
     private func deleteDocument() async {
-        guard let token = authManager.accessToken, let remoteId = document.remoteId else { return }
-        try? await DocumentService.shared.deleteDocument(id: remoteId, token: token)
-        try? DocumentRepository(context: context).delete(document)
-        dismiss()
+        do {
+            try await DocumentDeletionService.deleteCloud(document, context: context, auth: authManager, preferences: preferences)
+            dismiss()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func openOriginal() async {
+        if FileManager.default.fileExists(atPath: document.resolvedFileURL.path) {
+            showQuickLook = true
+            return
+        }
+        guard let scope = try? CloudOperationScope(auth: authManager, preferences: preferences),
+              let token = try? await scope.token(auth: authManager, preferences: preferences),
+              let remoteID = document.remoteId else { showFileNotFoundAlert = true; return }
+        let userID = scope.userID
+        do {
+            let data = try await DocumentService.shared.downloadOriginal(id: remoteID, token: token)
+            guard scope.isValid(userID: authManager.currentUserId, preferences: preferences) else { return }
+            let extensionName = URL(filePath: document.filename).pathExtension
+            document.fileURL = try CloudDocumentFiles.store(userID: userID).save(data, extension: extensionName.isEmpty ? "pdf" : extensionName)
+            try context.save()
+            showQuickLook = true
+        } catch { errorMessage = "Could not retrieve original. Please retry." }
     }
 
     private var explainButton: some View {
@@ -254,7 +274,7 @@ private struct LabValueRow: View {
 
     private var labValueAccessibilityLabel: String {
         let valueWithUnit = "\(labValue.value)\(labValue.unit.map { " \($0)" } ?? "")"
-        let status = labValue.isAbnormal ? "Abnormal: outside reference range." : "Normal."
+        let status = labValue.isAbnormal ? "Abnormal: outside reference range." : "No abnormal flag recorded."
         let range = labValue.referenceRange.map { "Reference range: \($0)." } ?? ""
         return "\(labValue.name): \(valueWithUnit). \(status) \(range)"
     }

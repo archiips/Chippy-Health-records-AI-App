@@ -6,6 +6,8 @@ struct DocumentUploadResponse: Decodable, Sendable {
     let documentId: String
 }
 
+private struct SignedDocumentURL: Decodable { let url: URL }
+
 struct DocumentAPIModel: Decodable, Sendable {
     let id: String
     let filename: String
@@ -69,14 +71,14 @@ actor DocumentService {
     static let shared = DocumentService()
     private let api = APIClient.shared
 
-    func upload(fileURL: URL, ocrText: String, mimeType: String, token: String) async throws -> String {
+    func upload(fileURL: URL, ocrText: String, mimeType: String, token: String, filename: String? = nil) async throws -> String {
         let fileData = try Data(contentsOf: fileURL)
         var fields: [String: String] = [:]
         if !ocrText.isEmpty { fields["ocr_text"] = ocrText }
         let response: DocumentUploadResponse = try await api.uploadMultipart(
             "/documents/upload",
             fileData: fileData,
-            fileName: fileURL.lastPathComponent,
+            fileName: filename ?? fileURL.lastPathComponent,
             mimeType: mimeType,
             fields: fields,
             token: token
@@ -86,6 +88,13 @@ actor DocumentService {
 
     func fetchDocuments(token: String) async throws -> [DocumentAPIModel] {
         try await api.request("/documents", token: token)
+    }
+
+    func downloadOriginal(id: String, token: String) async throws -> Data {
+        let signed: SignedDocumentURL = try await api.request("/documents/\(id)/url", token: token)
+        let (data, response) = try await URLSession.shared.data(from: signed.url)
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200 else { throw URLError(.badServerResponse) }
+        return data
     }
 
     func fetchDocument(id: String, token: String) async throws -> DocumentAPIModel {

@@ -5,6 +5,7 @@ import LocalAuthentication
 struct SettingsView: View {
     @Environment(AuthManager.self) private var authManager
     @Environment(AppLockManager.self) private var lockManager
+    @Environment(ProcessingPreferences.self) private var preferences
     @Environment(\.modelContext) private var context
 
     @AppStorage("faceIDEnabled") private var faceIDEnabled = true
@@ -56,6 +57,7 @@ struct SettingsView: View {
             if let email = authManager.email {
                 LabeledContent("Email", value: email)
             }
+            Button("Return to Local Records") { preferences.useLocal() }
             Button("Sign Out", role: .destructive) {
                 showSignOutConfirmation = true
             }
@@ -112,7 +114,9 @@ struct SettingsView: View {
     // MARK: - Actions
 
     private func deleteAllData() async {
-        guard let token = await authManager.validToken() else { return }
+        guard let scope = try? CloudOperationScope(auth: authManager, preferences: preferences),
+              let token = try? await scope.token(auth: authManager, preferences: preferences) else { return }
+        let userID = scope.userID
         isDeleting = true
         defer { isDeleting = false }
 
@@ -130,15 +134,22 @@ struct SettingsView: View {
             return
         }
 
-        // Clear local SwiftData
-        try? context.delete(model: HealthDocument.self)
-        try? context.delete(model: AnalysisResult.self)
-        try? context.delete(model: HealthEvent.self)
-        try? context.delete(model: ChatMessage.self)
-        try? context.save()
+        do {
+            try CloudDocumentFiles.store(userID: userID).removeAll()
+            try context.delete(model: HealthDocument.self)
+            try context.delete(model: RecordFact.self)
+            try context.delete(model: AnalysisResult.self)
+            try context.delete(model: HealthEvent.self)
+            try context.delete(model: ChatMessage.self)
+            try context.save()
+        } catch {
+            context.rollback()
+            errorMessage = "Cloud data was deleted, but local cleanup failed. Keep signed in and retry: \(error.localizedDescription)"
+            return
+        }
 
         // Sign out
-        authManager.signOut()
+        if scope.isValid(userID: authManager.currentUserId, preferences: preferences) { authManager.signOut() }
     }
 
     private var appVersion: String {

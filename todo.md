@@ -62,6 +62,7 @@
 
 - [x] **Document upload endpoint**
   ✅ Completed: 2026-04-07 — includes retry endpoint; ingestion stub flips status to complete (real pipeline Sprint 2)
+  ✅ **Verified update:** 2026-10-06 — scoped file/vector deletion, orphan storage cleanup, and upload/reset coordination added; backend lifecycle regression tests pass.
   - [x] Create `app/api/documents.py` router
   - [x] `POST /documents/upload`
   - [x] `GET /documents`
@@ -86,6 +87,7 @@
 
 - [x] **SwiftData stack**
   ✅ Completed: 2026-04-07
+  ✅ **Verified update:** 2026-10-06 — protected local/per-account cloud stores, page-indexed text, and cascading reviewed facts added; local persistence and cleanup regression tests pass.
   - [x] Define `HealthDocument` model: `id`, `filename`, `fileURL`, `documentType`, `processingStatus`, `thumbnailData`, `ocrText`, `uploadedAt`, `analysisResult` (optional relationship)
   - [x] Define `AnalysisResult` model: `id`, `documentId`, `summary`, `documentDate`, `providerName`, `diagnoses`, `medications`, `labValues`, `keyFindings` (JSONB → `[LabValue]` serialized as Data)
   - [x] Define `HealthEvent` model: `id`, `documentId`, `title`, `category` (enum), `eventDate`, `summary`
@@ -110,6 +112,7 @@
 
 - [x] **Document import UI**
   ✅ Completed: 2026-04-07 — also created DocumentService actor and added multipart upload to APIClient
+  ✅ **Verified update:** 2026-10-06 — local import needs no login; all pages use PDF text/Vision OCR; UUID filenames prevent overwrites; pending imports are invalidated by local deletion.
   - [x] Create `Features/DocumentImport/DocumentScannerView.swift` wrapping `VNDocumentCameraViewController` in `UIViewControllerRepresentable`
   - [x] Create `Features/DocumentImport/FilePicker.swift` wrapping `UIDocumentPickerViewController` (PDF only)
   - [x] Create `Features/DocumentImport/PhotoPicker.swift` using `PHPickerViewController` (JPEG/PNG/HEIC)
@@ -123,6 +126,7 @@
   - [x] Handle errors: show alert with retry option
 
 - [x] **Document library (basic)**
+  ✅ **Verified update:** 2026-10-06 — restored local thumbnails, photo/scan entry points, search, type filters, sorting, and editable record metadata; simulator library checks pass.
   ✅ Completed: 2026-04-07
   - [x] Create `Features/DocumentLibrary/DocumentLibraryView.swift` using `List` (not `LazyVStack`)
   - [x] Embed in `NavigationStack` (via `MainTabView`)
@@ -223,6 +227,7 @@
 
 - [x] **RAG query engine**
   ✅ **Completed:** 2026-04-08 — direct Gemini streaming used instead of LlamaIndex LLM wrapper; retriever top-k=5 with user_id filter; MockEmbedding used for retrieval-only index
+  ✅ **Verified update:** 2026-10-06 — owner and selected-document filters now apply to the retriever, with returned-scope validation; real Chroma/Qdrant synthetic regression tests pass.
   - [x] Create `app/ai/query_engine.py`:
     - [x] Build `VectorStoreIndex` from Qdrant collection filtered by `user_id`
     - [x] Configure retriever: top-k=5, MMR reranking enabled
@@ -243,6 +248,7 @@
 
 - [x] **Document explainer endpoint**
   ✅ **Completed:** 2026-04-08 — cached in `analysis_results.explainer_text`; streams from cache on repeat calls
+  ✅ **Verified update:** 2026-10-06 — failed/disconnected streams no longer cache partial explanations; sanitized errors and scoped cache writes verified.
   - [x] `POST /documents/{id}/explain` — fetch analysis result + full text, call Gemini 2.5 Flash with `EXPLAINER_PROMPT` (plain-language explanation, define medical terms inline, "what does this mean for me?" section), stream response via SSE
   - [x] Write `EXPLAINER_PROMPT` in `app/ai/prompts.py`: instruct model to explain in simple language a non-medical person can understand, define jargon inline, end with "This is for informational purposes only. Consult your doctor."
   - [x] Cache explainer result in `analysis_results.explainer_text` (don't re-call LLM if already cached)
@@ -260,6 +266,7 @@
     - [x] Cancel on task cancellation
 
 - [x] **Chat view**
+  ✅ **Verified update:** 2026-10-06 — restored primary local chat with persistent history, selected-record scope and tappable source pages; named/latest lookup and clear/import regressions pass.
   ✅ **Completed:** 2026-04-08 — "Select documents" filter chip deferred to Sprint 4 polish; ChatBubble in same file (private struct)
   - [x] Create `Features/Chat/ChatView.swift`
   - [x] `ChatViewModel` (`@Observable @MainActor`): `messages: [ChatMessage]`, `streamingText: String`, `isStreaming: Bool`
@@ -286,6 +293,7 @@
   - [x] Prominent disclaimer banner at top: "For informational purposes only. Not a substitute for professional medical advice."
 
 - [x] **Tab bar + navigation**
+  ✅ **Verified update:** 2026-10-06 — Records, Timeline, Chat and Settings restored in local mode; search remains available from Records; simulator navigation checks pass.
   ✅ **Completed:** 2026-04-08
   - [x] Create `App/MainTabView.swift` with 4 tabs: Library, Timeline, Chat, Settings
   - [x] Create `AppCoordinator` (`@Observable @MainActor`) with `NavigationPath` and `Route` enum: `.documentDetail(HealthDocument)`
@@ -314,6 +322,7 @@
 ### iOS
 
 - [x] **Health timeline view**
+  ✅ **Verified update:** 2026-10-06 — reviewed facts group by normalized document dates/category, with undated handling, filters, lab charts and export preview; chronology and photo workflow checks pass.
   ✅ **Completed:** 2026-04-08 — TimelineService fetches from API; SwiftData HealthEvent not used for display (API-driven); TipKit deferred
   - [x] Create `Features/Timeline/HealthTimelineView.swift`
   - [x] Use `LazyVStack` (not `List`) — needed for `scrollTransition` scroll animations
@@ -328,6 +337,7 @@
 
 - [x] **Face ID / Touch ID app lock**
   ✅ **Completed:** 2026-04-08 — falls back to device passcode; lock on background, re-auth on active
+  ✅ **Verified update:** 2026-10-06 — authentication now fails closed, supports device passcode, and rejects concurrent authentication requests; physical-device biometric QA remains pending.
   - [x] Create `Core/AppLockManager.swift` (`@Observable @MainActor`) using `LocalAuthentication`
   - [x] `authenticate()`: uses `.deviceOwnerAuthentication` (covers both biometrics + passcode fallback)
   - [x] Track `isUnlocked: Bool` — `LockScreenView` shown when false

@@ -5,6 +5,8 @@ import VisionKit
 struct DocumentLibraryView: View {
     @Environment(\.modelContext) private var context
     @Environment(AuthManager.self) private var authManager
+    @Environment(ProcessingPreferences.self) private var preferences
+    @State private var errorMessage: String?
     @Query(sort: \HealthDocument.uploadedAt, order: .reverse) private var documents: [HealthDocument]
 
     @State private var importVM = DocumentImportViewModel()
@@ -49,7 +51,7 @@ struct DocumentLibraryView: View {
         .fullScreenCover(isPresented: $importVM.showScanner) {
             DocumentScannerView(
                 onCompletion: { images in
-                    Task { await importVM.handleScannedImages(images, context: context, authManager: authManager) }
+                    Task { await importVM.handleScannedImages(images, context: context, authManager: authManager, preferences: preferences) }
                 },
                 onCancellation: { importVM.showScanner = false }
             )
@@ -60,7 +62,7 @@ struct DocumentLibraryView: View {
             FilePicker(
                 onCompletion: { url in
                     importVM.showFilePicker = false
-                    Task { await importVM.handlePickedFile(url, context: context, authManager: authManager) }
+                    Task { await importVM.handlePickedFile(url, context: context, authManager: authManager, preferences: preferences) }
                 },
                 onCancellation: { importVM.showFilePicker = false }
             )
@@ -70,7 +72,7 @@ struct DocumentLibraryView: View {
             PhotoPicker(
                 onCompletion: { image in
                     importVM.showPhotoPicker = false
-                    Task { await importVM.handlePickedPhoto(image, context: context, authManager: authManager) }
+                    Task { await importVM.handlePickedPhoto(image, context: context, authManager: authManager, preferences: preferences) }
                 },
                 onCancellation: { importVM.showPhotoPicker = false }
             )
@@ -105,6 +107,9 @@ struct DocumentLibraryView: View {
             startPolling()
         }
         .onDisappear { stopPolling() }
+        .alert("Cloud operation failed", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: { Text(errorMessage ?? "") }
     }
 
     // MARK: - Subviews
@@ -268,9 +273,29 @@ struct DocumentLibraryView: View {
     /// Returns false if the token is invalid (caller should stop polling).
     @discardableResult
     private func syncAll() async -> Bool {
-        guard let token = await authManager.validToken() else { return false }
+        guard let scope = try? CloudOperationScope(auth: authManager, preferences: preferences),
+              let token = try? await scope.token(auth: authManager, preferences: preferences) else { return false }
 
         let repo = DocumentRepository(context: context)
+        do {
+            let remoteDocuments = try await DocumentService.shared.fetchDocuments(token: token)
+            guard scope.isValid(userID: authManager.currentUserId, preferences: preferences) else { return false }
+            let userID = scope.userID
+            let files = try CloudDocumentFiles.store(userID: userID)
+            for remote in remoteDocuments {
+                guard try repo.fetchById(remote.id) == nil else { continue }
+                let fileURL = files.directory.appending(path: UUID().uuidString).appendingPathExtension("pdf")
+                let document = HealthDocument(id: remote.id, filename: remote.filename, fileURL: fileURL,
+                    documentType: DocumentType(rawValue: remote.documentType ?? "") ?? .unknown,
+                    processingStatus: ProcessingStatus(rawValue: remote.status) ?? .failed, remoteId: remote.id)
+                context.insert(document)
+            }
+            try context.save()
+        } catch {
+            context.rollback()
+            errorMessage = "Could not sync cloud records. Please retry."
+            return false
+        }
         let all = (try? repo.fetchAll()) ?? []
 
         let needsSync = all.filter {
@@ -278,7 +303,7 @@ struct DocumentLibraryView: View {
             ($0.processingStatus == .complete && $0.analysisResult == nil)
         }
         for doc in needsSync {
-            let ok = await syncDocument(doc, token: token)
+            let ok = await syncDocument(doc, token: token, scope: scope)
             if !ok { return false }  // 401 — stop syncing this round
         }
         return true
@@ -286,18 +311,19 @@ struct DocumentLibraryView: View {
 
     /// Returns false on auth failure so the caller can stop polling.
     @discardableResult
-    private func syncDocument(_ doc: HealthDocument, token: String) async -> Bool {
+    private func syncDocument(_ doc: HealthDocument, token: String, scope: CloudOperationScope) async -> Bool {
         guard let remoteId = doc.remoteId else { return true }
         let remote: DocumentDetailAPIModel
         do {
             remote = try await DocumentService.shared.fetchDocumentWithAnalysis(id: remoteId, token: token)
         } catch APIError.httpError(let code, _) where code == 401 {
-            _ = await authManager.refreshIfNeeded()
+            if scope.isValid(userID: authManager.currentUserId, preferences: preferences) { _ = await authManager.refreshIfNeeded() }
             return false
         } catch {
             return true  // network or other error — keep polling
         }
 
+        guard scope.isValid(userID: authManager.currentUserId, preferences: preferences) else { return false }
         if remote.status == "complete" {
             doc.processingStatus = .complete
             if let typeString = remote.documentType {
@@ -331,19 +357,22 @@ struct DocumentLibraryView: View {
     // MARK: - Actions
 
     private func deleteDocument(_ document: HealthDocument) async {
-        guard let token = authManager.accessToken, let remoteId = document.remoteId else { return }
-        try? await DocumentService.shared.deleteDocument(id: remoteId, token: token)
-        try? DocumentRepository(context: context).delete(document)
+        do {
+            try await DocumentDeletionService.deleteCloud(document, context: context, auth: authManager, preferences: preferences)
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func retryDocument(_ document: HealthDocument) async {
-        guard let token = await authManager.validToken(), let remoteId = document.remoteId else { return }
+        guard let scope = try? CloudOperationScope(auth: authManager, preferences: preferences),
+              let token = try? await scope.token(auth: authManager, preferences: preferences), let remoteId = document.remoteId else { return }
         do {
             try await DocumentService.shared.retry(id: remoteId, token: token)
+            guard scope.isValid(userID: authManager.currentUserId, preferences: preferences) else { return }
             document.processingStatus = .processing
-            try? context.save()
+            try context.save()
         } catch {
-            // Retry failed — leave status as .failed so the user can try again
+            context.rollback()
+            errorMessage = error.localizedDescription
         }
     }
 }

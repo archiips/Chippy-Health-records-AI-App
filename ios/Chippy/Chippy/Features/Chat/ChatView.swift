@@ -4,12 +4,13 @@ import SwiftData
 struct ChatView: View {
     @Environment(\.modelContext) private var context
     @Environment(AuthManager.self) private var authManager
+    @Environment(ProcessingPreferences.self) private var preferences
 
     @State private var viewModel = ChatViewModel()
     @State private var showClearConfirmation = false
 
     private let starterQuestions = [
-        "What medications am I on?",
+        "What medications are mentioned in my records?",
         "When was my last lab work?",
         "Summarize my recent visits.",
         "Do I have any abnormal lab results?",
@@ -33,7 +34,7 @@ struct ChatView: View {
         }
         .confirmationDialog("Clear chat history?", isPresented: $showClearConfirmation, titleVisibility: .visible) {
             Button("Clear History", role: .destructive) {
-                Task { await viewModel.clearHistory(authManager: authManager, context: context) }
+                Task { await viewModel.clearHistory(authManager: authManager, context: context, preferences: preferences) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -63,7 +64,7 @@ struct ChatView: View {
                     ForEach(starterQuestions, id: \.self) { question in
                         Button {
                             viewModel.inputText = question
-                            Task { await viewModel.sendMessage(authManager: authManager, context: context) }
+                            Task { await viewModel.sendMessage(authManager: authManager, context: context, preferences: preferences) }
                         } label: {
                             Text(question)
                                 .font(.subheadline)
@@ -153,7 +154,7 @@ struct ChatView: View {
                 } else {
                     let canSend = !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     Button("Send", systemImage: "arrow.up.circle.fill") {
-                        Task { await viewModel.sendMessage(authManager: authManager, context: context) }
+                        Task { await viewModel.sendMessage(authManager: authManager, context: context, preferences: preferences) }
                     }
                     .font(.title2)
                     .foregroundStyle(canSend ? .blue : .secondary)

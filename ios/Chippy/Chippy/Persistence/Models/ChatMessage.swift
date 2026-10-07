@@ -7,6 +7,7 @@ final class ChatMessage {
     var role: MessageRole
     var content: String
     var sourceDocumentIds: [String]
+    var localSourcesData: Data?
     var createdAt: Date
     var isStreaming: Bool  // true while SSE is in progress
 
@@ -24,6 +25,10 @@ final class ChatMessage {
         self.sourceDocumentIds = sourceDocumentIds
         self.createdAt = createdAt
         self.isStreaming = isStreaming
+    }
+    var localSources: [LocalRecordSource] {
+        get { localSourcesData.flatMap { try? JSONDecoder().decode([LocalRecordSource].self, from: $0) } ?? [] }
+        set { localSourcesData = try? JSONEncoder().encode(newValue) }
     }
 }
 

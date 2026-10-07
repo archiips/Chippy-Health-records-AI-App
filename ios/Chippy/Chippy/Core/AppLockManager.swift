@@ -6,9 +6,10 @@ import SwiftUI
 final class AppLockManager {
     var isUnlocked: Bool = false
     var biometryType: LABiometryType = .none
+    private var isAuthenticating = false
 
     private var isBiometricEnabled: Bool {
-        UserDefaults.standard.object(forKey: "faceIDEnabled") as? Bool ?? true
+        UserDefaults.standard.object(forKey: "faceIDEnabled") == nil ? true : UserDefaults.standard.bool(forKey: "faceIDEnabled")
     }
 
     init() {
@@ -19,6 +20,9 @@ final class AppLockManager {
     }
 
     func authenticate() async {
+        guard !isAuthenticating else { return }
+        isAuthenticating = true
+        defer { isAuthenticating = false }
         guard isBiometricEnabled else {
             isUnlocked = true
             return
@@ -27,22 +31,20 @@ final class AppLockManager {
         let context = LAContext()
         var error: NSError?
 
-        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
-            // No biometrics available — unlock directly
-            isUnlocked = true
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
+            isUnlocked = false
             return
         }
 
         let reason = "Unlock Chippy to access your health records"
         do {
             let success = try await context.evaluatePolicy(
-                .deviceOwnerAuthenticationWithBiometrics,
+                .deviceOwnerAuthentication,
                 localizedReason: reason
             )
             isUnlocked = success
         } catch {
-            // Biometrics failed or cancelled — unlock anyway (personal project)
-            isUnlocked = true
+            isUnlocked = false
         }
     }
 

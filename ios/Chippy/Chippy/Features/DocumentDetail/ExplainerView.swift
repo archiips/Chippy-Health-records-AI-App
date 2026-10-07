@@ -3,6 +3,7 @@ import SwiftUI
 struct ExplainerView: View {
     let document: HealthDocument
     @Environment(AuthManager.self) private var authManager
+    @Environment(ProcessingPreferences.self) private var preferences
     @Environment(\.dismiss) private var dismiss
 
     @State private var displayText: String = ""
@@ -96,7 +97,8 @@ struct ExplainerView: View {
     }
 
     private func startExplanation() async {
-        guard let token = await authManager.validToken(), let remoteId = document.remoteId else {
+        guard let scope = try? CloudOperationScope(auth: authManager, preferences: preferences),
+              let token = try? await scope.token(auth: authManager, preferences: preferences), let remoteId = document.remoteId else {
             hasError = true
             return
         }
@@ -106,6 +108,7 @@ struct ExplainerView: View {
         displayText = ""
 
         streamTask = Task {
+            guard scope.isValid(userID: authManager.currentUserId, preferences: preferences) else { isStreaming = false; return }
             var request = URLRequest(
                 url: Constants.baseURL.appendingPathComponent("/documents/\(remoteId)/explain")
             )
@@ -113,7 +116,7 @@ struct ExplainerView: View {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
             for await chunk in await StreamingService.shared.stream(request: request) {
-                guard !Task.isCancelled else { break }
+                guard !Task.isCancelled, scope.isValid(userID: authManager.currentUserId, preferences: preferences) else { break }
                 // Detect server-side error payload
                 if chunk.hasPrefix("{\"error\":") {
                     hasError = true

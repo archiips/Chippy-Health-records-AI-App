@@ -5,13 +5,14 @@ import SwiftData
 struct ChippyApp: App {
     @State private var authManager = AuthManager()
     @State private var lockManager = AppLockManager()
+    @State private var preferences = ProcessingPreferences()
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .modelContainer(AppModelContainer.shared)
                 .environment(authManager)
                 .environment(lockManager)
+                .environment(preferences)
         }
     }
 }

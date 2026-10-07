@@ -1,25 +1,26 @@
+import Foundation
 import SwiftData
 
 enum AppModelContainer {
-    static let shared: ModelContainer = {
-        let schema = Schema([
-            HealthDocument.self,
-            AnalysisResult.self,
-            HealthEvent.self,
-            ChatMessage.self,
-        ])
+    static let local = makeProtectedContainer(name: "local-records")
 
-        // cloudKitDatabase: .none — Apple prohibits health data in iCloud
-        let config = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: false,
-            cloudKitDatabase: .none
-        )
+    static func cloud(for userID: String) -> ModelContainer {
+        guard let id = UUID(uuidString: userID) else { fatalError("Invalid account identity") }
+        return makeProtectedContainer(name: "cloud-\(id.uuidString)")
+    }
 
+    private static func makeProtectedContainer(name: String) -> ModelContainer {
         do {
+            let directory = URL.applicationSupportDirectory.appending(path: "protected-record-stores", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                attributes: [.protectionKey: FileProtectionType.complete])
+            var protectedDirectory = directory
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try protectedDirectory.setResourceValues(values)
+            let schema = Schema([HealthDocument.self, AnalysisResult.self, HealthEvent.self, ChatMessage.self, RecordFact.self])
+            let config = ModelConfiguration(name, schema: schema, url: directory.appending(path: "\(name).store"), cloudKitDatabase: .none)
             return try ModelContainer(for: schema, configurations: [config])
-        } catch {
-            fatalError("Failed to create ModelContainer: \(error)")
-        }
-    }()
+        } catch { fatalError("Could not open protected record store") }
+    }
 }

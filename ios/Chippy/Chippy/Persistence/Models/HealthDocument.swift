@@ -12,6 +12,10 @@ final class HealthDocument {
     var ocrText: String?
     var uploadedAt: Date
     var remoteId: String?  // Supabase document UUID (same as id after upload)
+    var pageTextData: Data?
+
+    @Relationship(deleteRule: .cascade, inverse: \RecordFact.document)
+    var recordFacts: [RecordFact] = []
 
     @Relationship(deleteRule: .cascade)
     var analysisResult: AnalysisResult?
@@ -76,7 +80,18 @@ extension HealthDocument {
     /// after iOS updates or device restores. Re-deriving from just the filename
     /// ensures the path is always valid as long as the file exists.
     var resolvedFileURL: URL {
-        let dir = URL.applicationSupportDirectory.appending(path: "documents", directoryHint: .isDirectory)
+        let parent = fileURL.deletingLastPathComponent()
+        if parent.deletingLastPathComponent().lastPathComponent == "cloud-record-files" {
+            return URL.applicationSupportDirectory.appending(path: "cloud-record-files", directoryHint: .isDirectory)
+                .appending(path: parent.lastPathComponent, directoryHint: .isDirectory).appending(path: fileURL.lastPathComponent)
+        }
+        let folder = fileURL.deletingLastPathComponent().lastPathComponent == "local-record-files" ? "local-record-files" : "documents"
+        let dir = URL.applicationSupportDirectory.appending(path: folder, directoryHint: .isDirectory)
         return dir.appending(path: fileURL.lastPathComponent)
+    }
+
+    var pages: [DocumentPage] {
+        get { pageTextData.flatMap { try? JSONDecoder().decode([DocumentPage].self, from: $0) } ?? [] }
+        set { pageTextData = try? JSONEncoder().encode(newValue) }
     }
 }
