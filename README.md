@@ -16,6 +16,20 @@ Chippy is an iOS record organizer that starts on your device, without login. Imp
 
 The deployment target remains **iOS 26.4**. Foundation Models additionally requires compatible Apple Intelligence hardware, enabled Apple Intelligence, a downloaded model, and supported device language. Simulator success does not establish model accuracy or latency.
 
+## Verified status and next steps
+
+The latest simulator run on 2026-10-06 passed **44 unit tests and 5 UI tests**. The photo workflow added a uniquely named photographed fixture through the system photo picker, checked OCR, manually confirmed a fact, opened its timeline/chart, followed a scoped chat citation, previewed selected export, and verified persistence after relaunch. Captured source, export, and relaunch screens were inspected. Photo-picker cancellation, failed loads, successful retries, and late callbacks after record reset also have regression coverage.
+
+This verifies the local workflow with test fixtures. It does not establish automatic extraction quality, physical-camera behavior, or successful live cloud uploads. The physical-device model benchmark was skipped on the simulator.
+
+Next steps, in order:
+
+1. **Validate on a real iPhone.** Check existing-photo import, multi-page camera scanning, Face ID/passcode lock, relaunch persistence, and on-device model availability. Run the existing synthetic model benchmark on compatible hardware.
+2. **Evaluate and improve automatic extraction.** Test the existing Foundation Models fact suggestions against representative photographed documents. Measure omissions, incorrect associations, grounding, and performance; improve the flow while retaining source references and explicit review before facts enter the timeline.
+3. **Improve conversational explanations.** Extend chat beyond its current record lookup toward useful explanations grounded in selected documents, with citations and clear model-availability handling. This remains planned work; current chat does not provide full conversational AI.
+
+Live cloud integration and the release gates below require separate verification before distribution.
+
 ## Optional cloud baseline
 
 Settings → Use Cloud Mode presents an explicit data permission screen before sign-in. New cloud imports send originals and OCR text to the development backend, which uses Gemini extraction/chat, Supabase, and Chroma or Qdrant. Local records are never transferred automatically. Launching the app again starts in local mode; cloud permission is session-scoped. Return to local mode from cloud Settings or the sign-in toolbar.
