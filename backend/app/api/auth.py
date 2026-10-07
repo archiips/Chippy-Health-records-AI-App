@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.auth import create_access_token, create_refresh_token, decode_token, get_current_user
 from app.core.supabase_client import supabase, supabase_auth
 from app.models.schemas import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse
+from app.services.document_lifecycle import account_reset, delete_owned_document, delete_owned_storage
+from app.ai.vector_store import delete_user_vectors
 
 CurrentUser = Annotated[str, Depends(get_current_user)]
 
@@ -71,19 +73,17 @@ def logout():
 @router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
 def delete_account(user_id: CurrentUser):
     """Delete all user data. Auth account remains in Supabase (user can re-register)."""
-    # Delete storage files first
-    try:
-        files = supabase.storage.from_("medical-documents").list(path=user_id)
-        if files:
-            for folder in files:
-                folder_path = f"{user_id}/{folder['name']}"
-                contents = supabase.storage.from_("medical-documents").list(path=folder_path)
-                if contents:
-                    paths = [f"{folder_path}/{f['name']}" for f in contents]
-                    supabase.storage.from_("medical-documents").remove(paths)
-    except Exception as e:
-        print(f"[delete_account] Storage cleanup failed (continuing): {e}")
-
-    # Delete DB rows — cascades to analysis_results, health_events
-    supabase.table("documents").delete().eq("user_id", user_id).execute()
-    supabase.table("chat_messages").delete().eq("user_id", user_id).execute()
+    with account_reset(user_id):
+        # Paginate by deleting each retrieved page; no offset can skip rows.
+        while True:
+            rows = supabase.table("documents").select("id").eq("user_id", user_id).execute().data or []
+            if not rows:
+                break
+            for row in rows:
+                delete_owned_document(supabase, row["id"], user_id)
+        try:
+            delete_user_vectors(user_id)
+            delete_owned_storage(supabase, user_id)
+        except Exception:
+            raise HTTPException(status_code=503, detail="Record cleanup could not finish. Please retry.") from None
+        supabase.table("chat_messages").delete().eq("user_id", user_id).execute()

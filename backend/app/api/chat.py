@@ -44,7 +44,7 @@ async def stream_chat_endpoint(body: ChatRequest, request: Request, user_id: Cur
                 yield f"data: {safe}\n\n"
                 await asyncio.sleep(0)  # yield control to event loop
         except Exception as e:
-            error_payload = json.dumps({"error": str(e)})
+            error_payload = json.dumps({"error": "Chat is unavailable. Please retry."})
             yield f"data: {error_payload}\n\n"
         finally:
             yield "data: [DONE]\n\n"

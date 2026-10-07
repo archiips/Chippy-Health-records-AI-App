@@ -10,6 +10,7 @@ from app.background.tasks import ingest_document
 from app.core.auth import get_current_user
 from app.core.supabase_client import supabase
 from app.models.schemas import DocumentResponse, DocumentStatusResponse, SignedUrlResponse, UploadResponse
+from app.services.document_lifecycle import user_operation, delete_owned_document, upload_operation
 
 router = APIRouter()
 
@@ -37,38 +38,39 @@ def upload_document(
             detail=f"Unsupported file type '{file.content_type}'. Allowed: PDF, JPEG, PNG, HEIC.",
         )
 
-    document_id = str(uuid.uuid4())
-    file_bytes = file.file.read()
-    file_size = len(file_bytes)
-    storage_path = f"{user_id}/{document_id}/{file.filename}"
+    with upload_operation(user_id):
+        document_id = str(uuid.uuid4())
+        file_bytes = file.file.read()
+        file_size = len(file_bytes)
+        # Display filenames are untrusted; keep object paths entirely app-owned.
+        storage_path = f"{user_id}/{document_id}/original"
 
-    # Upload to Supabase Storage
-    try:
-        supabase.storage.from_("medical-documents").upload(
-            path=storage_path,
-            file=file_bytes,
-            file_options={"content-type": file.content_type},
-        )
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Storage upload failed: {e}")
+        # Upload to Supabase Storage
+        try:
+            supabase.storage.from_("medical-documents").upload(
+                path=storage_path,
+                file=file_bytes,
+                file_options={"content-type": file.content_type},
+            )
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Storage upload failed: {e}")
 
-    # Insert document row
-    supabase.table("documents").insert({
-        "id": document_id,
-        "user_id": user_id,
-        "filename": file.filename,
-        "file_path": storage_path,
-        "file_size": file_size,
-        "mime_type": file.content_type,
-        "ocr_text": ocr_text or None,
-        "status": "processing",
-    }).execute()
+        # Insert document row
+        supabase.table("documents").insert({
+            "id": document_id,
+            "user_id": user_id,
+            "filename": file.filename,
+            "file_path": storage_path,
+            "file_size": file_size,
+            "mime_type": file.content_type,
+            "ocr_text": ocr_text or None,
+            "status": "processing",
+        }).execute()
 
-    # Enqueue ingestion (Sprint 2: replace stub with real pipeline)
-    background_tasks.add_task(ingest_document, document_id, user_id)
+        # Enqueue ingestion (Sprint 2: replace stub with real pipeline)
+        background_tasks.add_task(ingest_document, document_id, user_id)
 
-    return UploadResponse(document_id=document_id)
-
+        return UploadResponse(document_id=document_id)
 
 @router.get("", response_model=list[DocumentResponse])
 def list_documents(user_id: CurrentUser):
@@ -85,7 +87,7 @@ def list_documents(user_id: CurrentUser):
         analysis = row.pop("analysis_results", None)
         docs.append(DocumentResponse(
             **row,
-            analysis_result=analysis[0] if analysis else None,
+            analysis_result=(analysis[0] if analysis else None) if isinstance(analysis, list) else analysis,
         ))
     return docs
 
@@ -116,27 +118,8 @@ def get_document(document_id: str, user_id: CurrentUser):
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(document_id: str, user_id: CurrentUser):
-    # Verify ownership + get storage path
-    result = (
-        supabase.table("documents")
-        .select("file_path")
-        .eq("id", document_id)
-        .eq("user_id", user_id)
-        .single()
-        .execute()
-    )
-
-    if not result.data:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
-
-    # Delete from storage first (so we don't lose the path)
-    try:
-        supabase.storage.from_("medical-documents").remove([result.data["file_path"]])
-    except Exception:
-        pass  # Don't block DB delete if storage delete fails — log in prod
-
-    # Delete DB row (cascades to analysis_results, health_events)
-    supabase.table("documents").delete().eq("id", document_id).eq("user_id", user_id).execute()
+    with user_operation(user_id):
+        delete_owned_document(supabase, document_id, user_id)
 
 
 @router.get("/{document_id}/url", response_model=SignedUrlResponse)
@@ -205,7 +188,7 @@ def retry_ingestion(document_id: str, background_tasks: BackgroundTasks, user_id
     if result.data["status"] != "failed":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only failed documents can be retried")
 
-    supabase.table("documents").update({"status": "processing", "error_message": None}).eq("id", document_id).execute()
+    supabase.table("documents").update({"status": "processing", "error_message": None}).eq("id", document_id).eq("user_id", user_id).execute()
     background_tasks.add_task(ingest_document, document_id, user_id)
 
     return UploadResponse(document_id=document_id)
@@ -237,6 +220,7 @@ async def explain_document(document_id: str, request: Request, user_id: CurrentU
         supabase.table("analysis_results")
         .select("id, explainer_text, summary, diagnoses, medications, key_findings, lab_values")
         .eq("document_id", document_id)
+        .eq("user_id", user_id)
         .single()
         .execute()
     )
@@ -279,6 +263,7 @@ async def explain_document(document_id: str, request: Request, user_id: CurrentU
         from app.ai.gemini_client import stream_completion
 
         full_response: list[str] = []
+        finished = False
         try:
             async for piece in stream_completion(
                 system=EXPLAINER_PROMPT,
@@ -291,16 +276,18 @@ async def explain_document(document_id: str, request: Request, user_id: CurrentU
                 full_response.append(piece)
                 safe = piece.replace("\n", "\\n")
                 yield f"data: {safe}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            else:
+                finished = True
+        except Exception:
+            yield f"data: {json.dumps({'error': 'Explanation is unavailable. Please retry.'})}\n\n"
         finally:
             yield "data: [DONE]\n\n"
             # Cache the result
-            if full_response and analysis:
+            if finished and full_response and analysis:
                 completed = "".join(full_response)
                 supabase.table("analysis_results").update(
                     {"explainer_text": completed}
-                ).eq("id", analysis["id"]).execute()
+                ).eq("id", analysis["id"]).eq("user_id", user_id).execute()
 
     return StreamingResponse(explain_stream(), media_type="text/event-stream",
                               headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

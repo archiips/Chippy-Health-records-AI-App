@@ -25,16 +25,6 @@ def _build_index(user_id: str, document_ids: list[str] | None = None) -> VectorS
 
     store = get_vector_store()
 
-    filters_list = [
-        MetadataFilter(key="user_id", value=user_id, operator=FilterOperator.EQ)
-    ]
-    if document_ids:
-        filters_list.append(
-            MetadataFilter(key="document_id", value=document_ids, operator=FilterOperator.IN)
-        )
-
-    filters = MetadataFilters(filters=filters_list)
-
     embed_model = GoogleGenAIEmbedding(
         model_name="gemini-embedding-001",
         api_key=settings.google_api_key,
@@ -56,21 +46,29 @@ async def stream_rag_response(
     Async generator that yields text chunks for the given query.
     Retrieves top-5 chunks from the user's documents and streams a Gemini response.
     """
-    print(f"[rag] building index for user={user_id} doc_ids={document_ids}")
     try:
         index = _build_index(user_id, document_ids)
     except Exception as e:
-        print(f"[rag] _build_index failed: {type(e).__name__}: {e}")
+        print(f"[rag] index failed type={type(e).__name__}")
         raise
 
-    retriever = index.as_retriever(similarity_top_k=5)
-    print(f"[rag] retrieving for query={query!r:.60}")
+    filters = [MetadataFilter(key="user_id", value=user_id, operator=FilterOperator.EQ)]
+    if document_ids is not None:
+        if not document_ids:
+            yield "No documents were selected."
+            return
+        filters.append(MetadataFilter(key="document_id", value=document_ids, operator=FilterOperator.IN))
+    retriever = index.as_retriever(similarity_top_k=5, filters=MetadataFilters(filters=filters))
     try:
         nodes = retriever.retrieve(query)
     except Exception as e:
-        print(f"[rag] retriever.retrieve failed: {type(e).__name__}: {e}")
+        print(f"[rag] retrieval failed type={type(e).__name__}")
         raise
-    print(f"[rag] retrieved {len(nodes)} nodes")
+    # Fail closed if a vector-store adapter ever ignores the filters.
+    if any(node.metadata.get("user_id") != user_id or
+           (document_ids is not None and node.metadata.get("document_id") not in document_ids)
+           for node in nodes):
+        raise RuntimeError("Retrieval scope validation failed")
 
     if not nodes:
         yield "I don't see any relevant information in your uploaded documents."

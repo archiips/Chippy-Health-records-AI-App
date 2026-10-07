@@ -7,7 +7,7 @@ Flow:
   3. Extract full text (PyMuPDF for PDF; fall back to iOS OCR text for images)
   4. Classify document type with Gemini (fast, cheap call on first 500 chars)
   5. Chunk text with document-type-aware strategy (LlamaIndex)
-  6. Embed chunks (text-embedding-004 via GoogleGenAIEmbedding)
+  6. Embed chunks (gemini-embedding-001)
   7. Index into Chroma (dev) / Qdrant (prod)
   8. Structured extraction via Gemini 2.5 Flash → analysis_results row
   9. Create health_events rows from extracted events
@@ -15,7 +15,6 @@ Flow:
 """
 
 import json
-import traceback
 from io import BytesIO
 
 import fitz  # PyMuPDF
@@ -23,7 +22,8 @@ from google import genai
 from google.genai import types as genai_types
 from app.ai.chunking import chunk_document
 from app.ai.prompts import CLASSIFICATION_PROMPT, EXTRACTION_SYSTEM_PROMPT
-from app.ai.vector_store import index_nodes
+from app.ai.vector_store import index_nodes, delete_document_vectors
+from app.services.document_lifecycle import user_operation
 from app.core.config import settings
 from app.core.supabase_client import supabase
 
@@ -71,16 +71,21 @@ def ingest(document_id: str, user_id: str) -> None:
     Full ingestion pipeline. Called by FastAPI BackgroundTasks (sync thread).
     Updates document status to "complete" or "failed" when done.
     """
-    try:
-        _run_pipeline(document_id, user_id)
-        supabase.table("documents").update({"status": "complete"}).eq("id", document_id).execute()
-    except Exception:
-        error_msg = traceback.format_exc()
-        print(f"[pipeline] FAILED document={document_id}\n{error_msg}")
-        supabase.table("documents").update({
-            "status": "failed",
-            "error_message": error_msg[-1000:],  # store last 1000 chars
-        }).eq("id", document_id).execute()
+    with user_operation(user_id):
+        row = supabase.table("documents").select("id").eq("id", document_id).eq("user_id", user_id).execute().data
+        if not row:  # A queued job must not resurrect a deleted record.
+            return
+        try:
+            delete_document_vectors(document_id, user_id)
+            supabase.table("health_events").delete().eq("document_id", document_id).eq("user_id", user_id).execute()
+            _run_pipeline(document_id, user_id)
+            supabase.table("documents").update({"status": "complete", "error_message": None}).eq("id", document_id).eq("user_id", user_id).execute()
+        except Exception as exc:
+            # Provider errors can contain source text; keep it out of logs/client responses.
+            print(f"[pipeline] FAILED type={type(exc).__name__}")
+            supabase.table("documents").update({
+                "status": "failed", "error_message": "Analysis failed. Please retry.",
+            }).eq("id", document_id).eq("user_id", user_id).execute()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -123,7 +128,7 @@ def _run_pipeline(document_id: str, user_id: str) -> None:
         extraction = _extract_structured(text)
 
     # Update document_type in DB
-    supabase.table("documents").update({"document_type": doc_type}).eq("id", document_id).execute()
+    supabase.table("documents").update({"document_type": doc_type}).eq("id", document_id).eq("user_id", user_id).execute()
 
     if not text.strip():
         raise ValueError("No text available for embedding")
