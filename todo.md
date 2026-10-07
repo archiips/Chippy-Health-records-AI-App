@@ -266,6 +266,7 @@
     - [x] Cancel on task cancellation
 
 - [x] **Chat view**
+  ✅ **Verified update:** 2026-10-06 — corrected natural question matching, help/follow-ups, Stop state, duplicate OCR and source-card layout; 39 unit and 4 UI checks pass. Local chat remains record lookup, not full conversational AI.
   ✅ **Verified update:** 2026-10-06 — restored primary local chat with persistent history, selected-record scope and tappable source pages; named/latest lookup and clear/import regressions pass.
   ✅ **Completed:** 2026-04-08 — "Select documents" filter chip deferred to Sprint 4 polish; ChatBubble in same file (private struct)
   - [x] Create `Features/Chat/ChatView.swift`

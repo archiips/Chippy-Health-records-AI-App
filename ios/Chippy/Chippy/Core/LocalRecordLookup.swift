@@ -4,15 +4,16 @@ import Foundation
 enum LocalRecordLookup {
     static func answer(question: String, documents: [HealthDocument], selectedDocumentID: String? = nil,
                        expandedTerms: [String] = []) -> LocalRecordAnswer {
+        if let help = LocalChatIntent.help(question) { return LocalRecordAnswer(text: help, sources: []) }
+        let clinicalWarning = LocalChatIntent.needsClinicalJudgment(question) ? "I cannot determine whether a result means you are healthy or recommend treatment. I can show what your records say, including any recorded reference ranges.\n\n" : ""
         let scoped = documents.filter { selectedDocumentID == nil || $0.id == selectedDocumentID }
         guard !scoped.isEmpty else { return LocalRecordAnswer(text: "Add a photo or scan of a medical record first. I can then find recorded results, medication mentions, and source pages on this device.", sources: []) }
         let query = question.lowercased()
         let kind: String? = query.contains("medicat") || query.contains("prescription") ? "medication" :
-            query.contains("lab") || query.contains("blood work") ? "lab" :
+            query.contains("lab") || query.contains("blood") || query.contains("test result") ? "lab" :
             query.contains("visit") ? "visit" : nil
-        let overview = query.contains("summar") || query.contains("overview")
-        let stopWords: Set<String> = ["find", "what", "when", "where", "was", "were", "are", "is", "my", "the", "a", "an", "in", "on", "of", "for", "and", "about", "show", "me", "please", "records", "record", "results", "result", "can", "you", "have", "do", "did", "i", "to", "does", "this", "tell", "with", "recorded", "health", "last", "latest", "most", "recent", "lab", "labs", "work", "blood", "medication", "medications", "prescription", "prescriptions", "mentions", "mentioned", "summarize", "summary", "overview", "visits", "visit", "diagnosis", "level", "levels"]
-        let specificTerms = query.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 2 && !stopWords.contains($0) }
+        let overview = query.contains("summar") || query.contains("overview") || query.contains("explain my record") || query.contains("understand my record")
+        let specificTerms = LocalChatIntent.terms(question)
         let latestQuestion = query.contains("last") || query.contains("latest") || query.contains("most recent")
         var facts = scoped.flatMap(\.recordFacts).filter { $0.isConfirmed && (kind == nil || $0.kind == kind) }
         if !specificTerms.isEmpty {
@@ -34,7 +35,9 @@ enum LocalRecordLookup {
                 let citations = selected.map {
                     LocalRecordSource(documentID: $0.documentID, pageNumber: $0.pageNumber, excerpt: $0.quote, reviewed: true)
                 }.filter { seen.insert($0.id).inserted }
-                return LocalRecordAnswer(text: warning + rows.joined(separator: "\n\n") + (ordered.count > 12 ? "\n\nShowing 12 matches. Narrow your question or choose a record for more." : ""), sources: citations)
+                var seenRows = Set<String>()
+                let uniqueRows = rows.filter { seenRows.insert($0).inserted }
+                return LocalRecordAnswer(text: clinicalWarning + warning + uniqueRows.joined(separator: "\n\n") + (ordered.count > 12 ? "\n\nShowing 12 matches. Narrow your question or choose a record for more." : ""), sources: citations)
             }
         }
         var terms = specificTerms
@@ -49,13 +52,16 @@ enum LocalRecordLookup {
                 let score = terms.reduce(0) { $0 + (page.text.localizedCaseInsensitiveContains($1) ? 1 : 0) }
                 guard score > 0 || overview else { continue }
                 let start = lines.firstIndex { line in terms.contains { line.localizedCaseInsensitiveContains($0) } } ?? 0
-                let excerpt = String(lines[max(0, start - 1)..<min(lines.count, start + 9)].joined(separator: "\n").prefix(900))
+                let excerpt = String(lines[max(0, start - 1)..<min(lines.count, start + 15)].joined(separator: "\n").prefix(900))
                 matches.append(Match(source: LocalRecordSource(documentID: document.id, pageNumber: page.number, excerpt: excerpt, reviewed: false), score: score))
             }
         }
-        let sources = matches.sorted { $0.score == $1.score ? $0.source.id < $1.source.id : $0.score > $1.score }.prefix(4).map(\.source)
+        var seenText = Set<String>()
+        let sources = matches.sorted { $0.score == $1.score ? $0.source.id < $1.source.id : $0.score > $1.score }.filter {
+            seenText.insert($0.source.excerpt.lowercased().components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")).inserted
+        }.prefix(2).map(\.source)
         guard !sources.isEmpty else { return LocalRecordAnswer(text: "I couldn't find that in the selected records. Try a test name, medication name, or wording from the document. Missing matches don't mean the event never happened.", sources: []) }
         let warning = kind == "medication" ? "Historical medication mentions do not establish current use. " : ""
-        return LocalRecordAnswer(text: warning + (latestQuestion ? "I can't establish which record is latest from unreviewed text. These are matching passages, not a date-ordered answer. " : "I found these passages in your records. ") + "This is unreviewed OCR text; check numbers, dates, and units against each original page.\n\n" + sources.enumerated().map { "[\($0.offset + 1)] \($0.element.excerpt)" }.joined(separator: "\n\n"), sources: sources)
+        return LocalRecordAnswer(text: clinicalWarning + warning + (latestQuestion ? "I can't establish which record is latest from unreviewed text. These are matching passages, not a date-ordered answer. " : "I found these passages in your records. ") + "This is unreviewed OCR text; check numbers, dates, and units against each original page.\n\n" + sources.enumerated().map { "[\($0.offset + 1)] \(String($0.element.excerpt.prefix(220)))\($0.element.excerpt.count > 220 ? "…" : "")" }.joined(separator: "\n\n") + "\n\nOpen a source below to check the full page or review the fields for clearer answers.", sources: sources)
     }
 }

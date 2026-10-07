@@ -68,9 +68,7 @@ final class ChippyUITests: XCTestCase {
         app.tabBars.buttons["Chat"].tap()
         let input = app.textFields["local-chat-input"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        input.tap(); input.typeText("When was my last lab work?")
-        app.buttons["Send"].tap()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "From the facts you reviewed")).firstMatch.waitForExistence(timeout: 10))
+        sendChat("When was my last lab work?", expecting: "From the facts you reviewed", in: app)
         let sources = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "[1] Photo record"))
         XCTAssertTrue(sources.firstMatch.waitForExistence(timeout: 5))
         let source = try XCTUnwrap(sources.allElementsBoundByIndex.last(where: \.isHittable))
@@ -78,6 +76,10 @@ final class ChippyUITests: XCTestCase {
         source.tap()
         XCTAssertTrue(app.buttons["Open Original Page"].waitForExistence(timeout: 5))
         app.navigationBars.buttons.firstMatch.tap()
+        sendChat("Show me my test results", expecting: "Glucose: 105", in: app)
+        sendChat("What about that result?", expecting: "105", in: app)
+        sendChat("Are my labs normal?", expecting: "cannot determine", in: app)
+        snapshot(app, name: "Record chat answers common questions")
         app.tabBars.buttons["Timeline"].tap()
         app.buttons["Export"].tap()
         XCTAssertTrue(app.navigationBars["Appointment Summary"].waitForExistence(timeout: 5))
@@ -107,6 +109,37 @@ final class ChippyUITests: XCTestCase {
         app.tabBars.buttons["Chat"].tap()
         XCTAssertTrue(app.navigationBars["Chat"].waitForExistence(timeout: 5))
         snapshot(app, name: "Restored record chat")
+    }
+
+    @MainActor
+    func testChatHelpAndCommonQuestionWording() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-hasCompletedOnboarding", "YES", "-faceIDEnabled", "NO"]
+        app.launch()
+        app.tabBars.buttons["Chat"].tap()
+        XCTAssertTrue(app.staticTexts["Offline record lookup"].waitForExistence(timeout: 5))
+        app.buttons["How Chat Works"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "This simulator uses offline record lookup")).firstMatch.waitForExistence(timeout: 5))
+        app.buttons["How Chat Works"].tap()
+        sendChat("Hello Chippy", expecting: "Hi!", in: app)
+        XCTAssertTrue(app.buttons["Summary"].exists)
+        sendChat("How does this work?", expecting: "original pages", in: app)
+        snapshot(app, name: "Guided local chat and useful help")
+    }
+
+    @MainActor
+    private func sendChat(_ question: String, expecting text: String, in app: XCUIApplication) {
+        let replies = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "local-assistant-message-"))
+        let previousID = replies.allElementsBoundByIndex.last?.identifier
+        let input = app.textFields["local-chat-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap(); input.typeText(question)
+        app.buttons["Send"].tap()
+        let newReply = NSPredicate { _, _ in
+            guard let last = replies.allElementsBoundByIndex.last else { return false }
+            return last.identifier != previousID && last.label.contains(text)
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: newReply, object: app)], timeout: 10), .completed)
     }
 
     @MainActor

@@ -8,25 +8,20 @@ struct LocalChatView: View {
     @State private var model = LocalChatViewModel()
     @State private var clearConfirmation = false
     @FocusState private var inputFocused: Bool
-    private let starters = ["What medications are mentioned in my records?", "When was my last lab work?", "Summarize my records."]
+    private let starters = [("Latest labs", "When was my last lab work?"), ("Medications", "What medications are mentioned in my records?"), ("Summary", "Summarize my records.")]
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
-                    Label("Your records. On this device.", systemImage: "lock.shield")
-                        .font(.subheadline).foregroundStyle(.secondary)
                     if messages.isEmpty {
                         VStack(alignment: .leading, spacing: 16) {
                             Image(systemName: "bubble.left.and.text.bubble.right").font(.largeTitle).foregroundStyle(Color.accentColor)
-                            Text("Make sense of your records").font(.title2).bold()
-                            Text("Find recorded results and medication mentions, with the original page a tap away.").foregroundStyle(.secondary)
-                            ForEach(starters, id: \.self) { question in
-                                Button { model.send(question, documents: documents, context: context) } label: {
-                                    HStack { Text(question).multilineTextAlignment(.leading); Spacer(); Image(systemName: "arrow.up.left") }
-                                        .font(.subheadline).padding(16).frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(Color.lavendorTint, in: RoundedRectangle(cornerRadius: 16))
-                                }.buttonStyle(.plain).disabled(model.isResponding)
+                            Text(documents.isEmpty ? "Start with a record" : "Ask about your records").font(.title2).bold()
+                            Text(documents.isEmpty ? "Add a medical document from Records, then ask about a test result or medication." : "Try a question below, or type a test or medication name. Open the cited page to check the original.").foregroundStyle(.secondary)
+                            if documents.isEmpty {
+                                NavigationLink("Add a photo or scan", destination: LocalLibraryView())
+                                    .buttonStyle(.borderedProminent)
                             }
                         }.padding(.vertical, 24)
                     }
@@ -40,25 +35,47 @@ struct LocalChatView: View {
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom, for: .sizeChanges)
             .onChange(of: messages.count) { proxy.scrollTo(messages.last?.id, anchor: .bottom) }
+            .onChange(of: model.isResponding) { _, responding in
+                proxy.scrollTo(responding ? "response" : messages.last?.id, anchor: .bottom)
+            }
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Chat")
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Menu {
-                    Button("All Records") { model.selectedDocumentID = nil }
-                    ForEach(documents) { doc in Button(doc.filename) { model.selectedDocumentID = doc.id } }
-                } label: {
-                    Label(model.selectedDocumentID.flatMap { id in documents.first { $0.id == id }?.filename } ?? "All Records", systemImage: "doc.text.magnifyingglass")
-                        .lineLimit(1)
-                }.accessibilityLabel("Choose chat records")
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Clear Chat", systemImage: "trash") { clearConfirmation = true }.disabled(messages.isEmpty)
             }
         }
+        .safeAreaInset(edge: .top) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Menu {
+                        Button("All Records") { model.cancel(); model.selectedDocumentID = nil }
+                        ForEach(documents) { doc in Button(doc.filename) { model.cancel(); model.selectedDocumentID = doc.id } }
+                    } label: {
+                        Label(model.selectedDocumentID.flatMap { id in documents.first { $0.id == id }?.filename } ?? "All Records", systemImage: "doc.text.magnifyingglass")
+                            .font(.subheadline).lineLimit(1)
+                    }.accessibilityLabel("Choose chat records")
+                    Spacer()
+                    Text("\(documents.count) records").font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Offline record lookup").font(.caption).foregroundStyle(.secondary)
+                DisclosureGroup("How Chat Works") {
+                    Text(LocalChatQueryService.modeDescription + " Replies show recorded facts or short OCR excerpts, with links to the originals. Review imported fields for clearer answers. Chat does not diagnose, recommend treatment, or upload your records.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.font(.caption)
+            }.padding(.horizontal, 20).padding(.vertical, 10).background(.bar)
+        }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(starters, id: \.0) { starter in
+                            Button(starter.0) { inputFocused = false; model.send(starter.1, documents: documents, context: context) }
+                                .buttonStyle(.bordered).font(.caption).disabled(model.isResponding || documents.isEmpty)
+                        }
+                    }
+                }.scrollIndicators(.hidden)
                 Text("Answers quote your records. Not medical advice.").font(.caption).foregroundStyle(.secondary)
                 HStack(alignment: .bottom, spacing: 12) {
                     TextField("Ask about your records…", text: $model.input, axis: .vertical)

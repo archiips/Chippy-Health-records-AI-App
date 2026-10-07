@@ -16,6 +16,22 @@ final class LocalChatViewModel {
         guard !text.isEmpty, !isResponding else { return }
         generation += 1
         let operation = generation
+        errorMessage = nil
+        var lookupQuestion = text
+        var lookupDocuments = documents
+        if LocalChatIntent.isFollowUp(text) {
+            do {
+                var fetch = FetchDescriptor<ChatMessage>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+                fetch.fetchLimit = 20
+                let history = try context.fetch(fetch)
+                if let previous = history.first(where: { $0.role == .assistant }), !previous.localSources.isEmpty,
+                   let topic = history.first(where: { $0.role == .user && $0.createdAt <= previous.createdAt && !LocalChatIntent.isFollowUp($0.content) }) {
+                    lookupQuestion = topic.content + " " + text
+                    let ids = Set(previous.localSources.map(\.documentID))
+                    lookupDocuments = documents.filter { ids.contains($0.id) }
+                }
+            } catch { errorMessage = "Previous conversation context could not be read. Ask using a test or medication name." }
+        }
         input = ""
         isResponding = true
         let revision = LocalRecordLifecycle.shared.revision
@@ -26,10 +42,10 @@ final class LocalChatViewModel {
         catch { context.rollback(); errorMessage = "Your message could not be saved."; isResponding = false; return }
         responseTask = Task {
             defer { if generation == operation { isResponding = false; responseTask = nil } }
-            let terms = await LocalChatQueryService().terms(for: text)
+            let terms = await LocalChatQueryService().terms(for: lookupQuestion)
             guard !Task.isCancelled, generation == operation, revision == LocalRecordLifecycle.shared.revision else { return }
             // The sources and answer come from this store, not from generated medical claims.
-            let answer = LocalRecordLookup.answer(question: text, documents: documents, selectedDocumentID: scope, expandedTerms: terms)
+            let answer = LocalRecordLookup.answer(question: lookupQuestion, documents: lookupDocuments, selectedDocumentID: scope, expandedTerms: terms)
             let assistant = ChatMessage(role: .assistant, content: answer.text, sourceDocumentIds: Array(Set(answer.sources.map(\.documentID))))
             assistant.localSources = answer.sources
             context.insert(assistant)
@@ -38,7 +54,12 @@ final class LocalChatViewModel {
         }
     }
 
-    func cancel() { responseTask?.cancel() }
+    func cancel() {
+        generation += 1
+        responseTask?.cancel()
+        responseTask = nil
+        isResponding = false
+    }
 
     func clear(context: ModelContext) {
         generation += 1

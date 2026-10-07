@@ -8,6 +8,16 @@ struct LocalSearchTerms {
 }
 
 actor LocalChatQueryService {
+    nonisolated static var modeDescription: String {
+        #if targetEnvironment(simulator)
+        "This simulator uses offline record lookup, not a conversational AI model."
+        #else
+        SystemLanguageModel.default.isAvailable && SystemLanguageModel.default.supportsLocale(Locale.current)
+            ? "Apple Intelligence assists with finding search terms on this device."
+            : "Apple Intelligence is unavailable here; offline record lookup still works."
+        #endif
+    }
+
     func terms(for question: String) async -> [String] {
         #if targetEnvironment(simulator)
         return []
