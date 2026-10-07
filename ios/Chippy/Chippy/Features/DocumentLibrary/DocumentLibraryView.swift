@@ -15,6 +15,8 @@ struct DocumentLibraryView: View {
     @State private var activeFilter: DocumentType? = nil
     @State private var sortOldestFirst = false
     @State private var isInitialLoad = true
+    @State private var isLoadingPhoto = false
+    @State private var photoSelectionScope: CloudOperationScope?
 
     private var filteredDocuments: [HealthDocument] {
         let base = activeFilter.map { f in documents.filter { $0.documentType == f } } ?? documents
@@ -41,7 +43,7 @@ struct DocumentLibraryView: View {
         .navigationTitle("Documents")
         .toolbar { toolbarContent }
         .confirmationDialog("Import Document", isPresented: $importVM.showSourceSheet) {
-            if VNDocumentCameraViewController.isSupported {
+            if DocumentScannerView.isAvailable {
                 Button("Scan Document") { importVM.showScanner = true }
             }
             Button("Choose File") { importVM.showFilePicker = true }
@@ -72,14 +74,23 @@ struct DocumentLibraryView: View {
             PhotoPicker(
                 onCompletion: { image in
                     importVM.showPhotoPicker = false
-                    Task { await importVM.handlePickedPhoto(image, context: context, authManager: authManager, preferences: preferences) }
+                    isLoadingPhoto = false
+                    guard let scope = photoSelectionScope else { return }
+                    Task { await importVM.handlePickedPhoto(image, context: context, authManager: authManager, preferences: preferences, expectedScope: scope) }
                 },
-                onCancellation: { importVM.showPhotoPicker = false }
+                onCancellation: { importVM.showPhotoPicker = false; isLoadingPhoto = false },
+                onFailure: { message in
+                    importVM.showPhotoPicker = false
+                    isLoadingPhoto = false
+                    importVM.errorMessage = message
+                    importVM.showError = true
+                },
+                onLoading: { photoSelectionScope = try? CloudOperationScope(auth: authManager, preferences: preferences); isLoadingPhoto = true }
             )
             .ignoresSafeArea()
         }
         .overlay {
-            if importVM.isProcessing {
+            if importVM.isProcessing || isLoadingPhoto {
                 processingOverlay
             }
         }

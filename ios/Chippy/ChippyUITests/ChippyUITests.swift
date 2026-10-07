@@ -11,8 +11,7 @@ final class ChippyUITests: XCTestCase {
         app.launchArguments = ["-hasCompletedOnboarding", "YES", "-faceIDEnabled", "NO"]
         app.launch()
         XCTAssertTrue(app.navigationBars["Records"].waitForExistence(timeout: 15))
-        app.buttons["Import"].tap()
-        app.buttons["Import Photo"].tap()
+        app.buttons["Add Photo"].tap()
         let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
         XCTAssertTrue(photo.waitForExistence(timeout: 10))
         let picker = XCTAttachment(screenshot: app.screenshot())
@@ -21,12 +20,15 @@ final class ChippyUITests: XCTestCase {
         add(picker)
         photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.navigationBars["Photos"].waitForNonExistence(timeout: 15))
-        let record = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Photo record")).firstMatch
-        if !record.waitForExistence(timeout: 15) {
-            print(app.debugDescription)
-        }
-        XCTAssertTrue(record.exists)
-        record.tap()
+        let marker = "Photo E2E " + UUID().uuidString.prefix(8)
+        // Only a newly completed import navigates here; an older list row cannot satisfy this check.
+        XCTAssertTrue(app.buttons["Read Page Text"].waitForExistence(timeout: 20))
+        app.buttons["Record Details"].tap()
+        let nameField = app.textFields["Record name"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.tap(); nameField.typeText(" " + marker)
+        XCTAssertTrue((nameField.value as? String)?.contains(marker) == true)
+        app.buttons["Save"].tap()
         XCTAssertTrue(app.buttons["Read Page Text"].waitForExistence(timeout: 5))
         app.buttons["Read Page Text"].tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "SYNTHETIC RECORD")).firstMatch.exists)
@@ -61,15 +63,21 @@ final class ChippyUITests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
         app.tabBars.buttons["Timeline"].tap()
         XCTAssertTrue(app.staticTexts["September 2026"].waitForExistence(timeout: 5))
+        let importedEvent = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+        scrollTo(importedEvent, in: app)
+        XCTAssertTrue(importedEvent.exists)
         snapshot(app, name: "Photographed medical record timeline")
+        for _ in 0..<10 where !app.buttons["Lab Trends"].isHittable { app.swipeDown() }
         app.buttons["Lab Trends"].tap()
         XCTAssertTrue(app.navigationBars["Lab Trends"].waitForExistence(timeout: 5))
         app.buttons["Done"].tap()
         app.tabBars.buttons["Chat"].tap()
+        app.buttons["Choose chat records"].tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch.tap()
         let input = app.textFields["local-chat-input"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         sendChat("When was my last lab work?", expecting: "From the facts you reviewed", in: app)
-        let sources = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "[1] Photo record"))
+        let sources = app.buttons.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "[1]", marker))
         XCTAssertTrue(sources.firstMatch.waitForExistence(timeout: 5))
         let source = try XCTUnwrap(sources.allElementsBoundByIndex.last(where: \.isHittable))
         snapshot(app, name: "Local chat answer and page citation")
@@ -84,13 +92,30 @@ final class ChippyUITests: XCTestCase {
         app.buttons["Export"].tap()
         XCTAssertTrue(app.navigationBars["Appointment Summary"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Share Selected Facts"].exists)
-        app.switches.firstMatch.switches.firstMatch.tap()
+        let importedFact = app.switches.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+        scrollTo(importedFact, in: app)
+        XCTAssertTrue(importedFact.exists)
+        let control = importedFact.switches.firstMatch
+        if control.exists { control.tap() } else { importedFact.tap() }
         app.buttons["review-selected-facts"].tap()
         XCTAssertTrue(app.buttons["Share Selected Facts"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch.exists)
         let export = XCTAttachment(screenshot: app.screenshot())
         export.name = "Selected reviewed export preview"
         export.lifetime = .keepAlways
         add(export)
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Records"].waitForExistence(timeout: 10))
+        let search = app.searchFields.firstMatch
+        search.tap(); search.typeText(marker)
+        let savedRecord = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+        XCTAssertTrue(savedRecord.waitForExistence(timeout: 5))
+        savedRecord.tap()
+        let savedFact = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Reviewed by you")).firstMatch
+        scrollTo(savedFact, in: app)
+        XCTAssertTrue(savedFact.exists)
+        snapshot(app, name: "Imported photo and reviewed fact survive relaunch")
     }
 
     @MainActor
@@ -109,6 +134,36 @@ final class ChippyUITests: XCTestCase {
         app.tabBars.buttons["Chat"].tap()
         XCTAssertTrue(app.navigationBars["Chat"].waitForExistence(timeout: 5))
         snapshot(app, name: "Restored record chat")
+    }
+
+    @MainActor
+    func testPhotoEntryAndCancellationDoNotTriggerAnotherImportSource() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-hasCompletedOnboarding", "YES", "-faceIDEnabled", "NO"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars["Records"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["Take a Scan"].isEnabled)
+        app.buttons["Add Photo"].tap()
+        XCTAssertTrue(app.navigationBars["Photos"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Photos"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Add Photo"].isHittable)
+        let importRow = app.cells.containing(.button, identifier: "Add Photo").firstMatch
+        XCTAssertTrue(importRow.exists)
+        importRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertFalse(app.navigationBars["Photos"].waitForExistence(timeout: 3), "Space between separate buttons must not activate photo import")
+        app.buttons["Import"].tap()
+        app.buttons["Import Photo"].tap()
+        XCTAssertTrue(app.navigationBars["Photos"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.navigationBars["Photos"].waitForNonExistence(timeout: 5))
+        app.buttons["Import"].tap()
+        app.buttons["Import PDF"].tap()
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["Add Photo"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.alerts.allElementsBoundByIndex.isEmpty)
+        snapshot(app, name: "Independent import sources after cancellation")
     }
 
     @MainActor
@@ -144,7 +199,7 @@ final class ChippyUITests: XCTestCase {
 
     @MainActor
     private func scrollTo(_ element: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<5 {
+        for _ in 0..<10 {
             if element.exists && element.isHittable { return }
             app.swipeUp()
         }

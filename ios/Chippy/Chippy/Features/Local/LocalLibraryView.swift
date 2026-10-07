@@ -9,6 +9,8 @@ struct LocalLibraryView: View {
     @State private var showFiles = false
     @State private var showScanner = false
     @State private var showPhotos = false
+    @State private var isLoadingPhoto = false
+    @State private var photoSelectionRevision: Int?
     @State private var pendingDelete: HealthDocument?
     @State private var errorMessage: String?
     @State private var search = ""
@@ -31,10 +33,13 @@ struct LocalLibraryView: View {
             }
             Section {
                 HStack(spacing: 12) {
-                    Button("Take a Scan", systemImage: "camera") { showScanner = true }.disabled(!VNDocumentCameraViewController.isSupported)
+                    Button("Take a Scan", systemImage: "camera") {
+                        guard DocumentScannerView.isAvailable else { return }
+                        showScanner = true
+                    }.disabled(!DocumentScannerView.isAvailable)
                     Spacer()
                     Button("Add Photo", systemImage: "photo.badge.plus") { showPhotos = true }
-                }.font(.subheadline).padding(.vertical, 6).disabled(importer.isProcessing)
+                }.buttonStyle(.borderless).font(.subheadline).padding(.vertical, 6).disabled(importer.isProcessing || isLoadingPhoto)
             }
             if !documents.isEmpty && filtered.isEmpty { ContentUnavailableView.search(text: search) }
             ForEach(filtered) { document in
@@ -43,6 +48,7 @@ struct LocalLibraryView: View {
                 }
                 .swipeActions { Button("Delete", role: .destructive) { pendingDelete = document } }
             }
+            if isLoadingPhoto && !importer.isProcessing { ProgressView("Loading selected photo…") }
             if importer.isProcessing { ProgressView("Reading every page on this device…") }
         }
         .navigationTitle("Records")
@@ -59,8 +65,8 @@ struct LocalLibraryView: View {
                 Button("Import PDF", systemImage: "doc") { showFiles = true }
                 Button("Import Photo", systemImage: "photo") { showPhotos = true }
                 Button("Scan Pages", systemImage: "camera") { showScanner = true }
-                    .disabled(!VNDocumentCameraViewController.isSupported)
-            }.disabled(importer.isProcessing)
+                    .disabled(!DocumentScannerView.isAvailable)
+            }.disabled(importer.isProcessing || isLoadingPhoto)
         }
         .sheet(isPresented: $showFiles) {
             FilePicker { url in
@@ -71,8 +77,11 @@ struct LocalLibraryView: View {
         .sheet(isPresented: $showPhotos) {
             PhotoPicker { image in
                 showPhotos = false
-                Task { await importer.importImages([image], context: context) }
-            } onCancellation: { showPhotos = false }
+                guard let revision = photoSelectionRevision else { isLoadingPhoto = false; return }
+                Task { await importer.importImages([image], context: context, expectedRevision: revision); isLoadingPhoto = false }
+            } onCancellation: { showPhotos = false; isLoadingPhoto = false }
+                onFailure: { message in showPhotos = false; isLoadingPhoto = false; errorMessage = message }
+                onLoading: { photoSelectionRevision = LocalRecordLifecycle.shared.revision; isLoadingPhoto = true }
         }
         .fullScreenCover(isPresented: $showScanner) {
             DocumentScannerView { images in
@@ -81,6 +90,7 @@ struct LocalLibraryView: View {
             } onCancellation: { showScanner = false }
                 .interactiveDismissDisabled()
         }
+        .navigationDestination(item: $importer.importedDocument) { document in RecordReviewView(document: document) }
         .alert("Delete this record?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("Delete", role: .destructive) {
                 guard let document = pendingDelete else { return }

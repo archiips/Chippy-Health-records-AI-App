@@ -111,6 +111,7 @@
   - [x] Dismiss keyboard on tap outside text fields — `scrollDismissesKeyboard(.interactively)` + `@FocusState`
 
 - [x] **Document import UI**
+  ✅ **Verified update:** 2026-10-06 — isolated photo/scan buttons, visible photo-load errors, clean retries, automatic review and late-reset guards; 44 unit and 5 simulator UI tests pass, including the newly imported photo through timeline/chat/export/relaunch.
   ✅ Completed: 2026-04-07 — also created DocumentService actor and added multipart upload to APIClient
   ✅ **Verified update:** 2026-10-06 — local import needs no login; all pages use PDF text/Vision OCR; UUID filenames prevent overwrites; pending imports are invalidated by local deletion.
   - [x] Create `Features/DocumentImport/DocumentScannerView.swift` wrapping `VNDocumentCameraViewController` in `UIViewControllerRepresentable`

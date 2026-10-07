@@ -2,6 +2,14 @@ import SwiftUI
 import VisionKit
 
 struct DocumentScannerView: UIViewControllerRepresentable {
+    static var isAvailable: Bool {
+        #if targetEnvironment(simulator)
+        false // Simulator may report support but cannot capture document-camera pages.
+        #else
+        VNDocumentCameraViewController.isSupported
+        #endif
+    }
+
     let onCompletion: ([UIImage]) -> Void
     let onCancellation: () -> Void
 

@@ -28,9 +28,9 @@ final class DocumentImportViewModel {
     var showError = false
     private let processor = DocumentTextProcessor()
 
-    func handleScannedImages(_ images: [UIImage], context: ModelContext, authManager: AuthManager, preferences: ProcessingPreferences) async {
+    func handleScannedImages(_ images: [UIImage], context: ModelContext, authManager: AuthManager, preferences: ProcessingPreferences, expectedScope: CloudOperationScope? = nil) async {
         showScanner = false
-        await process(auth: authManager, preferences: preferences) { scope in
+        await process(auth: authManager, preferences: preferences, expectedScope: expectedScope) { scope in
             let data = try images.map { image in
                 guard let data = image.pngData() else { throw ImportError.conversionFailed }
                 return data
@@ -58,16 +58,17 @@ final class DocumentImportViewModel {
         }
     }
 
-    func handlePickedPhoto(_ image: UIImage, context: ModelContext, authManager: AuthManager, preferences: ProcessingPreferences) async {
-        await handleScannedImages([image], context: context, authManager: authManager, preferences: preferences)
+    func handlePickedPhoto(_ image: UIImage, context: ModelContext, authManager: AuthManager, preferences: ProcessingPreferences, expectedScope: CloudOperationScope? = nil) async {
+        await handleScannedImages([image], context: context, authManager: authManager, preferences: preferences, expectedScope: expectedScope)
     }
 
-    private func process(auth: AuthManager, preferences: ProcessingPreferences, _ work: (CloudOperationScope) async throws -> Void) async {
+    private func process(auth: AuthManager, preferences: ProcessingPreferences, expectedScope: CloudOperationScope? = nil, _ work: (CloudOperationScope) async throws -> Void) async {
         guard !isProcessing else { return }
         isProcessing = true
         defer { isProcessing = false }
         do {
-            let scope = try CloudOperationScope(auth: auth, preferences: preferences)
+            let scope = try expectedScope ?? CloudOperationScope(auth: auth, preferences: preferences)
+            guard scope.isValid(userID: auth.currentUserId, preferences: preferences) else { throw CancellationError() }
             try await work(scope)
         }
         catch { errorMessage = error.localizedDescription; showError = true }
